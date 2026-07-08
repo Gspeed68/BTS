@@ -9,24 +9,50 @@ const ERC20_ABI = [
   'function transfer(address to, uint256 amount) returns (bool)',
 ]
 
+// Known stablecoin deployments on Sepolia
+const STABLECOINS = [
+  {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+    color: '#2775CA',
+    bg: 'rgba(39,117,202,0.12)',
+  },
+  {
+    symbol: 'USDT',
+    name: 'Tether USD',
+    address: '0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0',
+    color: '#26A17B',
+    bg: 'rgba(38,161,123,0.12)',
+  },
+  {
+    symbol: 'DAI',
+    name: 'Dai Stablecoin',
+    address: '0x3e622317f8C93f7328350cF0B56d9eD4C620C5d6',
+    color: '#F5AC37',
+    bg: 'rgba(245,172,55,0.12)',
+  },
+  {
+    symbol: 'LINK',
+    name: 'Chainlink',
+    address: '0x779877A7B0D9E8603169DdbD7836e478b4624789',
+    color: '#2A5ADA',
+    bg: 'rgba(42,90,218,0.12)',
+  },
+]
+
 export default function TokenManager({ signer, address }) {
   const [tokens, setTokens] = useState([])
   const [contractInput, setContractInput] = useState('')
   const [adding, setAdding] = useState(false)
+  const [addingPreset, setAddingPreset] = useState(null)
   const [addError, setAddError] = useState('')
   const [activeSend, setActiveSend] = useState(null)
 
-  async function addToken() {
-    setAddError('')
-    if (!ethers.isAddress(contractInput)) { setAddError('Invalid contract address.'); return }
-    if (tokens.find(t => t.address.toLowerCase() === contractInput.toLowerCase())) {
-      setAddError('Token already added.')
-      return
-    }
-
-    setAdding(true)
+  async function loadToken(contractAddress) {
+    if (tokens.find(t => t.address.toLowerCase() === contractAddress.toLowerCase())) return
     try {
-      const contract = new ethers.Contract(contractInput, ERC20_ABI, signer)
+      const contract = new ethers.Contract(contractAddress, ERC20_ABI, signer)
       const [name, symbol, decimals, raw] = await Promise.all([
         contract.name(),
         contract.symbol(),
@@ -34,12 +60,39 @@ export default function TokenManager({ signer, address }) {
         contract.balanceOf(address),
       ])
       setTokens(prev => [...prev, {
-        address: contractInput,
+        address: contractAddress,
         name,
         symbol,
         decimals: Number(decimals),
         balance: ethers.formatUnits(raw, decimals),
       }])
+    } catch {
+      throw new Error('Could not fetch token.')
+    }
+  }
+
+  async function addPreset(sc) {
+    setAddingPreset(sc.address)
+    setAddError('')
+    try {
+      await loadToken(sc.address)
+    } catch {
+      setAddError(`Could not load ${sc.symbol} — contract may not be active on this network.`)
+    } finally {
+      setAddingPreset(null)
+    }
+  }
+
+  async function addCustomToken() {
+    setAddError('')
+    if (!ethers.isAddress(contractInput)) { setAddError('Invalid contract address.'); return }
+    if (tokens.find(t => t.address.toLowerCase() === contractInput.toLowerCase())) {
+      setAddError('Token already added.')
+      return
+    }
+    setAdding(true)
+    try {
+      await loadToken(contractInput)
       setContractInput('')
     } catch {
       setAddError('Could not fetch token. Check the contract address.')
@@ -54,8 +107,9 @@ export default function TokenManager({ signer, address }) {
     try {
       const contract = new ethers.Contract(tokenAddr, ERC20_ABI, signer)
       const raw = await contract.balanceOf(address)
-      const balance = ethers.formatUnits(raw, token.decimals)
-      setTokens(prev => prev.map(t => t.address === tokenAddr ? { ...t, balance } : t))
+      setTokens(prev => prev.map(t =>
+        t.address === tokenAddr ? { ...t, balance: ethers.formatUnits(raw, t.decimals) } : t
+      ))
     } catch {}
   }
 
@@ -64,78 +118,114 @@ export default function TokenManager({ signer, address }) {
     if (activeSend === addr) setActiveSend(null)
   }
 
+  const addedAddresses = new Set(tokens.map(t => t.address.toLowerCase()))
+
   return (
     <>
+      {/* Stablecoin Quick-Add */}
       <div className="card">
-        <div className="card-title">Add ERC-20 Token</div>
+        <div className="card-title">Stablecoins</div>
+        <div className="stablecoin-grid">
+          {STABLECOINS.map(sc => {
+            const isAdded = addedAddresses.has(sc.address.toLowerCase())
+            const isLoading = addingPreset === sc.address
+            return (
+              <button
+                key={sc.address}
+                className={`stablecoin-chip ${isAdded ? 'added' : ''}`}
+                onClick={() => !isAdded && addPreset(sc)}
+                disabled={isAdded || isLoading}
+                title={sc.address}
+              >
+                <div className="sc-icon" style={{ background: sc.bg, color: sc.color }}>
+                  {isLoading ? <span className="spinner" style={{ width: 14, height: 14, borderTopColor: sc.color, borderColor: `${sc.color}44` }} /> : sc.symbol.slice(0, 2)}
+                </div>
+                <div className="sc-info">
+                  <span className="sc-symbol" style={{ color: isAdded ? 'var(--success)' : 'var(--text)' }}>
+                    {isAdded ? '✓ ' : ''}{sc.symbol}
+                  </span>
+                  <span className="sc-name">{sc.name}</span>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <hr className="divider" />
+
+        {/* Custom token */}
+        <div className="card-title">Add Any ERC-20</div>
         <div className="field">
           <label>Contract Address</label>
           <input
-            placeholder="0x... token contract address"
+            placeholder="0x..."
             value={contractInput}
             onChange={e => { setContractInput(e.target.value); setAddError('') }}
-            onKeyDown={e => e.key === 'Enter' && addToken()}
+            onKeyDown={e => e.key === 'Enter' && addCustomToken()}
           />
         </div>
         {addError && <div className="alert alert-danger">{addError}</div>}
-        <div className="alert alert-info" style={{ marginBottom: 16, fontSize: '0.8rem' }}>
-          Tip: Chainlink LINK on Sepolia —{' '}
-          <code style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>
-            0x779877A7B0D9E8603169DdbD7836e478b4624789
-          </code>
-        </div>
-        <button className="btn btn-primary btn-full" onClick={addToken} disabled={adding}>
+        <button className="btn btn-primary btn-full" onClick={addCustomToken} disabled={adding}>
           {adding ? <><span className="spinner" /> Loading…</> : 'Add Token'}
         </button>
       </div>
 
+      {/* Token List */}
       {tokens.length > 0 && (
         <div className="card">
-          <div className="card-title">Your Tokens</div>
+          <div className="card-title">Your Tokens ({tokens.length})</div>
           <div className="token-list">
-            {tokens.map(token => (
-              <div key={token.address}>
-                <div className="token-item">
-                  <div className="token-info">
-                    <span className="token-symbol">{token.symbol}</span>
-                    <span className="token-name">{token.name}</span>
-                    <span className="token-name" style={{ fontSize: '0.7rem' }}>
-                      {token.address.slice(0, 10)}…{token.address.slice(-6)}
-                    </span>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div className="token-balance">
-                      {parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })} {token.symbol}
+            {tokens.map(token => {
+              const preset = STABLECOINS.find(s => s.address.toLowerCase() === token.address.toLowerCase())
+              return (
+                <div key={token.address}>
+                  <div className="token-item">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {preset && (
+                        <div className="sc-icon" style={{ background: preset.bg, color: preset.color }}>
+                          {token.symbol.slice(0, 2)}
+                        </div>
+                      )}
+                      <div className="token-info">
+                        <span className="token-symbol">{token.symbol}</span>
+                        <span className="token-name">{token.name}</span>
+                        <span className="token-name" style={{ fontSize: '0.68rem' }}>
+                          {token.address.slice(0, 10)}…{token.address.slice(-6)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="token-actions">
-                      <button className="copy-btn" title="Refresh" onClick={() => refreshToken(token.address)}>↻</button>
-                      <button
-                        className="copy-btn"
-                        style={{ color: 'var(--accent)' }}
-                        onClick={() => setActiveSend(activeSend === token.address ? null : token.address)}
-                      >
-                        {activeSend === token.address ? 'Cancel' : 'Send'}
-                      </button>
-                      <button className="copy-btn" style={{ color: 'var(--danger)' }} onClick={() => removeToken(token.address)}>
-                        ✕
-                      </button>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="token-balance">
+                        {parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        <span style={{ color: 'var(--accent)', marginLeft: 4, fontSize: '0.8rem' }}>{token.symbol}</span>
+                      </div>
+                      <div className="token-actions">
+                        <button className="copy-btn" title="Refresh" onClick={() => refreshToken(token.address)}>↻</button>
+                        <button
+                          className="copy-btn"
+                          style={{ color: 'var(--accent)' }}
+                          onClick={() => setActiveSend(activeSend === token.address ? null : token.address)}
+                        >
+                          {activeSend === token.address ? 'Cancel' : 'Send'}
+                        </button>
+                        <button className="copy-btn" style={{ color: 'var(--danger)' }} onClick={() => removeToken(token.address)}>
+                          ✕
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {activeSend === token.address && (
-                  <TokenSendForm
-                    token={token}
-                    signer={signer}
-                    onSent={() => {
-                      setActiveSend(null)
-                      refreshToken(token.address)
-                    }}
-                    onClose={() => setActiveSend(null)}
-                  />
-                )}
-              </div>
-            ))}
+                  {activeSend === token.address && (
+                    <TokenSendForm
+                      token={token}
+                      signer={signer}
+                      onSent={() => { setActiveSend(null); refreshToken(token.address) }}
+                      onClose={() => setActiveSend(null)}
+                    />
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
@@ -195,7 +285,7 @@ function TokenSendForm({ token, signer, onSent, onClose }) {
         <div style={{ marginTop: 4, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
           Balance: {parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 6 })} {token.symbol}
           <button
-            style={{ marginLeft: 8, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem' }}
+            style={{ marginLeft: 8, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700 }}
             onClick={() => setAmount(token.balance)}
           >
             Max

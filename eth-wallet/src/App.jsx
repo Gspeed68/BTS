@@ -8,7 +8,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>⬡ ETH Wallet</h1>
+        <img src="/logo.png" alt="AriesGate Tech" className="app-logo" />
         <div className="header-actions">
           <span className="network-badge">SEPOLIA TESTNET</span>
           {wallet && (
